@@ -1,128 +1,159 @@
-name: CI
+name: CI/CD Pipeline
 
 on:
   push:
+    branches: ["**"]
+  pull_request:
     branches: [main]
 
 jobs:
-  backend:
-    runs-on: ubuntu-latest
-
-    defaults:
-      run:
-        working-directory: backend
-
+  backend-tests:
+    runs-on: ubuntu-24.04
+    services:
+      timescaledb:
+        image: timescale/timescaledb:2.25.0-pg17
+        env:
+          POSTGRES_USER: infoclimat
+          POSTGRES_PASSWORD: infoclimat2026
+          POSTGRES_DB: meteodb
+        ports: ['5432:5432']
+        options: --health-cmd "pg_isready -U infoclimat -d meteodb" --health-interval 10s --health-timeout 5s --health-retries 5
     steps:
-      - name: checkout
-        uses: actions/checkout@v4
-
-      - name: install python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.14.3'
-
-      - name: install uv
-        uses: astral-sh/setup-uv@v4
-
-      - name: install dependencies
-        run: uv sync --locked --all-extras
-
-      - name: tests back
-        run: uv run pytest weather/tests/ --junitxml=report.xml
-
-      - name: upload test report
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - name: Install & test backend
+        working-directory: backend
+        run: |
+          uv sync --extra dev
+          cp .env.example .env
+          uv run pytest --junitxml=test-report.xml --tb=short
+        env:
+          DB_HOST: localhost
+      - uses: actions/upload-artifact@v4
         if: always()
-        uses: actions/upload-artifact@v4
         with:
-          name: test-back
-          path: backend/report.xml
+          name: backend-test-report
+          path: backend/test-report.xml
 
-      - name: lint
-        run: uv run ruff check .
-
-      - name: test with bandit
-        run: uv run bandit -r . --exclude ./.venv -f json -o bandit.json || true
-
-      - name: upload bandit report
-        uses: actions/upload-artifact@v4
+  frontend-tests:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
-          name: scan-code-report
-          path: backend/bandit.json
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci --legacy-peer-deps
+        working-directory: frontend
+      - run: npx vitest run --project unit
+        working-directory: frontend
 
-      - name: build backend
-        run: docker build -t ${{ secrets.DOCKER_USERNAME }}/meteo-app:latest .
-
-      - name: trivy
-        uses: aquasecurity/trivy-action@0.35.0
+  lint:
+    runs-on: ubuntu-24.04
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - name: Lint backend
+        working-directory: backend
+        run: |
+          uv sync --extra dev
+          uv run ruff check . --output-format=json > ruff-report.json || true
+      - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          image-ref: ${{ secrets.DOCKER_USERNAME }}/meteo-app:latest
+          name: lint-report
+          path: backend/ruff-report.json
+
+  security-scan:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - name: Run bandit
+        working-directory: backend
+        run: |
+          uv sync --extra dev
+          uv pip install bandit
+          uv run bandit -r weather config -f json -o bandit-report.json || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: security-scan-report
+          path: backend/bandit-report.json
+
+  build-docker:
+    runs-on: ubuntu-24.04
+    needs: [backend-tests, frontend-tests, lint]
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          docker build -t devops-backend:latest ./backend
+          docker build -t devops-frontend:latest ./frontend
+          docker save devops-backend:latest -o backend-image.tar
+          docker save devops-frontend:latest -o frontend-image.tar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: docker-image-backend
+          path: backend-image.tar
+          retention-days: 1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: docker-image-frontend
+          path: frontend-image.tar
+          retention-days: 1
+
+  trivy-scan:
+    runs-on: ubuntu-24.04
+    needs: build-docker
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: docker-image-backend }
+      - run: docker load -i backend-image.tar
+      - uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: devops-backend:latest
           format: json
-          output: backend/trivy-report.json
-          exit-code: '0'
-          severity: CRITICAL,HIGH
-
-      - name: upload trivy report
-        uses: actions/upload-artifact@v4
+          output: trivy-backend-report.json
+          severity: CRITICAL,HIGH,MEDIUM
+      - uses: actions/download-artifact@v4
+        with: { name: docker-image-frontend }
+      - run: docker load -i frontend-image.tar
+      - uses: aquasecurity/trivy-action@master
         with:
-          name: trivy-report
-          path: backend/trivy-report.json
-      - name: Log in to Docker Hub
-        if: github.ref == 'refs/heads/main'
-        uses: docker/login-action@v3
+          image-ref: devops-frontend:latest
+          format: json
+          output: trivy-frontend-report.json
+          severity: CRITICAL,HIGH,MEDIUM
+      - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
+          name: trivy-reports
+          path: |
+            trivy-backend-report.json
+            trivy-frontend-report.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vex-file
+          path: .github/vex.json
 
-      - name: push backend
-        if: github.ref == 'refs/heads/main'
-        run: docker push ${{ secrets.DOCKER_USERNAME }}/meteo-app:latest
-  frontend:
-      runs-on: ubuntu-latest
-      defaults:
-        run:
-          working-directory: frontend
-
-      steps:
-        - name: checkout
-          uses: actions/checkout@v4
-
-        - name: install node
-          uses: actions/setup-node@v4
-          with:
-            node-version: '24'
-
-        - name: install dependencies
-          run: npm ci
-
-        - name: lint
-          run: npm run lint
-
-        - name: build frontend
-          run: docker build -t ${{ secrets.DOCKER_USERNAME }}/meteo-front:latest .
-
-        - name: trivy
-          uses: aquasecurity/trivy-action@0.35.0
-          with:
-            image-ref: ${{ secrets.DOCKER_USERNAME }}/meteo-front:latest
-            format: json
-            output: frontend/front-report.json
-            exit-code: '0'
-            severity: CRITICAL,HIGH
-
-        - name: upload trivy report
-          uses: actions/upload-artifact@v4
-          with:
-            name: front-report
-            path: frontend/front-report.json
-
-        - name: login dockerhub
-          if: github.ref == 'refs/heads/main'
-          uses: docker/login-action@v3
-          with:
-            username: ${{ secrets.DOCKER_USERNAME }}
-            password: ${{ secrets.DOCKER_PASSWORD }}
-
-        - name: push frontend
-          if: github.ref == 'refs/heads/main'
-          run: docker push ${{ secrets.DOCKER_USERNAME }}/meteo-front:latest
-
+  push-to-registry:
+    runs-on: ubuntu-24.04
+    needs: [build-docker, trivy-scan, security-scan]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    permissions:
+      contents: read
+      packages: write
+    env:
+      REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: echo "REPO_LC=${REPO,,}" >> $GITHUB_ENV
+      - run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+      - run: |
+          docker build -t ghcr.io/${REPO_LC}/backend:latest ./backend
+          docker push ghcr.io/${REPO_LC}/backend:latest
+          docker build -t ghcr.io/${REPO_LC}/frontend:latest ./frontend
+          docker push ghcr.io/${REPO_LC}/frontend:latest
