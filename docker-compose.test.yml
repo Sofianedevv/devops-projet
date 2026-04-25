@@ -2,11 +2,14 @@ services:
   timescaledb:
     image: timescale/timescaledb:2.25.0-pg17
     container_name: timescaledb
-    env_file:
-      - ./.env
+    environment:
+      POSTGRES_USER: infoclimat
+      POSTGRES_PASSWORD: infoclimat2026
+      POSTGRES_DB: meteodb
     volumes:
       - timescaledb-data:/var/lib/postgresql/data
-      - ./db_data/meteodb_dump.sql:/docker-entrypoint-initdb.d/dump.sql:ro
+      - ./db_data/meteodb_dump.sql:/data/meteodb_dump.sql:ro
+      - ./db_data/init-db.sh:/docker-entrypoint-initdb.d/init-db.sh:ro
     networks:
       - bd_net
     healthcheck:
@@ -14,49 +17,79 @@ services:
       interval: 10s
       timeout: 20s
       retries: 10
-      start_period: 60s
+      start_period: 40s
     restart: unless-stopped
 
   nginx:
     image: nginx:1.29.5-alpine3.23-perl
     ports:
       - "80:80"
-      - "443:443"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
-      - /etc/letsencrypt:/etc/nginx/ssl
     depends_on:
       - frontend
       - backend
     networks:
       - app_net
 
-
-
   backend:
-    image: ghcr.io/dataforgoodfr/14_valorisationdonneemeteo-backend:latest
-
-
+    build:
+      context: ./backend
     env_file:
       - ./.env
     depends_on:
       timescaledb:
         condition: service_healthy
-
     networks:
       - app_net
       - bd_net
 
-
   frontend:
-    image: ghcr.io/dataforgoodfr/14_valorisationdonneemeteo-frontend:latest
+    build:
+      context: ./frontend
     env_file:
       - ./.env
     networks:
       - app_net
 
+  prometheus:
+    image: prom/prometheus:v3.4.0
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    depends_on:
+      - backend
+    networks:
+      - app_net
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.6.0
+    container_name: grafana
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
+    networks:
+      - app_net
+    restart: unless-stopped
+
 volumes:
   timescaledb-data:
+    driver: local
+  prometheus-data:
+    driver: local
+  grafana-data:
     driver: local
 networks:
   app_net:
