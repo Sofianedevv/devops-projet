@@ -4,7 +4,7 @@ WORKDIR /app
 
 COPY package*.json .
 
-RUN npm install
+RUN npm ci
 
 COPY . .
 
@@ -17,6 +17,8 @@ WORKDIR /app
 COPY --from=build /app/.output /app/.output
 
 ENV NODE_ENV=production
+
+USER node
 
 EXPOSE 3000
 

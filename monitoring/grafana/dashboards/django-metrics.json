@@ -1,0 +1,37 @@
+{
+    "uid": "meteo-dashboard",
+    "title": "Django Backend Metrics",
+    "refresh": "10s",
+    "time": { "from": "now-30m", "to": "now" },
+    "panels": [
+      {
+        "id": 1,
+        "title": "Requests per second",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+        "targets": [{ "expr": "rate(django_http_requests_total_by_method_total[1m])", "legendFormat": "{{method}}" }]
+      },
+      {
+        "id": 2,
+        "title": "Response status codes",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+        "targets": [{ "expr": "rate(django_http_responses_total_by_status_total[1m])", "legendFormat": "{{status}}" }]
+      },
+      {
+        "id": 3,
+        "title": "Avg latency",
+        "type": "gauge",
+        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+        "targets": [{ "expr": "rate(django_http_requests_latency_seconds_by_view_method_sum[5m]) / rate(django_http_requests_latency_seconds_by_view_method_count[5m])" }]
+      },
+      {
+        "id": 4,
+        "title": "Targets UP",
+        "type": "stat",
+        "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+        "targets": [{ "expr": "up", "legendFormat": "{{job}}", "instant": true }]
+      }
+    ],
+    "schemaVersion": 39
+  }

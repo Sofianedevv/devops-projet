@@ -1,19 +1,18 @@
 {
-    "@context": "https://openvex.dev/ns/v0.2.0",
-    "@id": "https://github.com/sofianedevv/devops-projet/vex",
-    "author": "sofianedevv",
-    "timestamp": "2026-04-09T00:00:00Z",
-    "version": 1,
-    "statements": [
-      {
-        "vulnerability": {"@id": "note"},
-        "products": [
-          {"@id": "pkg:docker/devops-backend@latest"},
-          {"@id": "pkg:docker/devops-frontend@latest"}
-        ],
-        "status": "under_investigation",
-        "justification": "vulnerabilities found by trivy, still checking if they affect us"
-      }
-    ]
-  }
-  
+  "@context": "https://openvex.dev/ns/v0.2.0",
+  "@id": "https://github.com/dataforgoodfr/14_ValorisationDonneeMeteo/vex",
+  "author": "sofianedevv",
+  "timestamp": "2026-04-09T00:00:00Z",
+  "version": 1,
+  "statements": [
+    {
+      "vulnerability": { "@id": "note" },
+      "products": [
+        { "@id": "pkg:docker/devops-backend@latest" },
+        { "@id": "pkg:docker/devops-frontend@latest" }
+      ],
+      "status": "under_investigation",
+      "justification": "vulnerabilities found by trivy, still checking if they affect us"
+    }
+  ]
+}
