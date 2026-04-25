@@ -1,4 +1,4 @@
-FROM node:24-alpine AS build
+FROM dhi.io/node:22-alpine3.21-dev AS build
 
 WORKDIR /app
 
@@ -10,7 +10,7 @@ COPY . .
 
 RUN npm run build
 
-FROM node:24-alpine AS prod
+FROM dhi.io/node:22-alpine3.21 AS prod
 
 WORKDIR /app
 
@@ -18,8 +18,6 @@ COPY --from=build /app/.output /app/.output
 
 ENV NODE_ENV=production
 
-USER node
-
 EXPOSE 3000
 
-CMD [ "node", ".output/server/index.mjs" ]
+CMD ["node", ".output/server/index.mjs"]

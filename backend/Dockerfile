@@ -1,4 +1,4 @@
-FROM python:3.12-slim-bookworm AS build
+FROM dhi.io/python:3.12-debian12-dev AS build
 
 WORKDIR /app
 
@@ -9,18 +9,13 @@ RUN uv sync --locked --no-dev
 
 COPY . .
 
-FROM python:3.12-slim-bookworm
+FROM dhi.io/python:3.12-debian12
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
-RUN groupadd -r django && useradd -r -g django -d /app -s /sbin/nologin django
-
 WORKDIR /app
 COPY --from=build /app /app
-RUN chown -R django:django /app
-
-USER django
 
 EXPOSE 8000
 CMD ["/app/.venv/bin/gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "3", "--timeout", "120", "--worker-tmp-dir", "/dev/shm", "--access-logfile", "-", "--error-logfile", "-", "--log-level", "info"]
