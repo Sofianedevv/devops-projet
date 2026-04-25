@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 jobs:
-  backend-tests:
+  backend:
     runs-on: ubuntu-24.04
     services:
       timescaledb:
@@ -21,21 +21,34 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
-      - name: Install & test backend
+      - name: Install dependencies
+        working-directory: backend
+        run: uv sync --extra dev
+      - name: Tests
         working-directory: backend
         run: |
-          uv sync --extra dev
           cp .env.example .env
           uv run pytest --junitxml=test-report.xml --tb=short
         env:
           DB_HOST: localhost
+      - name: Lint
+        working-directory: backend
+        run: uv run ruff check . --output-format=json > ruff-report.json || true
+      - name: Security scan
+        working-directory: backend
+        run: |
+          uv pip install bandit
+          uv run bandit -r weather config -f json -o bandit-report.json || true
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: backend-test-report
-          path: backend/test-report.xml
+          name: backend-reports
+          path: |
+            backend/test-report.xml
+            backend/ruff-report.json
+            backend/bandit-report.json
 
-  frontend-tests:
+  frontend:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -49,79 +62,27 @@ jobs:
       - run: npx vitest run --project unit
         working-directory: frontend
 
-  lint:
+  build:
     runs-on: ubuntu-24.04
-    continue-on-error: true
+    needs: [backend, frontend]
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v4
-      - name: Lint backend
-        working-directory: backend
+      - name: Build Docker images
         run: |
-          uv sync --extra dev
-          uv run ruff check . --output-format=json > ruff-report.json || true
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: lint-report
-          path: backend/ruff-report.json
-
-  security-scan:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v4
-      - name: Run bandit
-        working-directory: backend
-        run: |
-          uv sync --extra dev
-          uv pip install bandit
-          uv run bandit -r weather config -f json -o bandit-report.json || true
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: security-scan-report
-          path: backend/bandit-report.json
-
-  build-docker:
-    runs-on: ubuntu-24.04
-    needs: [backend-tests, frontend-tests, lint]
-    steps:
-      - uses: actions/checkout@v4
-      - run: |
           docker build -t devops-backend:latest ./backend
           docker build -t devops-frontend:latest ./frontend
-          docker save devops-backend:latest -o backend-image.tar
-          docker save devops-frontend:latest -o frontend-image.tar
-      - uses: actions/upload-artifact@v4
-        with:
-          name: docker-image-backend
-          path: backend-image.tar
-          retention-days: 1
-      - uses: actions/upload-artifact@v4
-        with:
-          name: docker-image-frontend
-          path: frontend-image.tar
-          retention-days: 1
-
-  trivy-scan:
-    runs-on: ubuntu-24.04
-    needs: build-docker
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with: { name: docker-image-backend }
-      - run: docker load -i backend-image.tar
-      - uses: aquasecurity/trivy-action@master
+      - name: Trivy scan backend
+        uses: aquasecurity/trivy-action@master
         with:
           image-ref: devops-backend:latest
           format: json
           output: trivy-backend-report.json
           severity: CRITICAL,HIGH,MEDIUM
-      - uses: actions/download-artifact@v4
-        with: { name: docker-image-frontend }
-      - run: docker load -i frontend-image.tar
-      - uses: aquasecurity/trivy-action@master
+      - name: Trivy scan frontend
+        uses: aquasecurity/trivy-action@master
         with:
           image-ref: devops-frontend:latest
           format: json
@@ -138,23 +99,13 @@ jobs:
         with:
           name: vex-file
           path: .github/vex.json
-
-  push-to-registry:
-    runs-on: ubuntu-24.04
-    needs: [build-docker, trivy-scan, security-scan]
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    continue-on-error: true
-    permissions:
-      contents: read
-      packages: write
-    env:
-      REPO: ${{ github.repository }}
-    steps:
-      - uses: actions/checkout@v4
-      - run: echo "REPO_LC=${REPO,,}" >> $GITHUB_ENV
-      - run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-      - run: |
-          docker build -t ghcr.io/${REPO_LC}/backend:latest ./backend
+      - name: Push to ghcr.io
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        continue-on-error: true
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+          REPO_LC=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          docker tag devops-backend:latest ghcr.io/${REPO_LC}/backend:latest
           docker push ghcr.io/${REPO_LC}/backend:latest
-          docker build -t ghcr.io/${REPO_LC}/frontend:latest ./frontend
+          docker tag devops-frontend:latest ghcr.io/${REPO_LC}/frontend:latest
           docker push ghcr.io/${REPO_LC}/frontend:latest
