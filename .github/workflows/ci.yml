@@ -143,6 +143,7 @@ jobs:
     runs-on: ubuntu-24.04
     needs: [build-docker, trivy-scan, security-scan]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    continue-on-error: true
     permissions:
       contents: read
       packages: write
